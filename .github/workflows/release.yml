@@ -120,27 +120,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
-      id-token: write # OIDC identity for trusted publishing
+      id-token: write # for provenance
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      # registry-url is needed so npm knows which registry the OIDC identity is
-      # for — without any .npmrc it gave up with ENEEDAUTH instead of reaching
-      # for OIDC. But setup-node also writes an auth line and a placeholder
-      # NODE_AUTH_TOKEN, and npm authenticates with that placeholder and gets a
-      # 404. So the registry line stays and the auth line is stripped.
-      #
-      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.0, so the
-      # bundled npm is upgraded rather than trusted to be recent enough.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          package-manager-cache: false
-      - name: Use an npm that supports trusted publishing
-        run: |
-          npm install -g npm@latest
-          echo "node $(node --version)  npm $(npm --version)"
 
       # postinstall resolves the release by the package version, so a mismatch
       # here would publish a package that looks for a tag that does not exist.
@@ -154,35 +142,24 @@ jobs:
             exit 1
           fi
 
-      # No NODE_AUTH_TOKEN: the registry authenticates this run by its OIDC
-      # identity, which npm is in the middle of making the only supported way to
-      # publish from CI — tokens that bypass 2FA are being restricted. Provenance
-      # is attached automatically for a public repo, so --provenance is not
-      # passed.
-      #
-      # Requires the package on npmjs.com to name this repository and this
-      # workflow file as a trusted publisher; without that this step fails, and
-      # it should, rather than quietly shipping nothing.
-      # OIDC needs both request variables, not just the URL.
-      - name: Strip the placeholder auth line and report the credentials
-        run: |
-          RC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          echo "npmrc before: $RC"
-          sed 's/=.*/=<redacted>/' "$RC" 2>/dev/null || echo "  (none)"
-          [ -f "$RC" ] && sed -i '/_authToken/d;/always-auth/d' "$RC"
-          echo "npmrc after:"
-          sed 's/=.*/=<redacted>/' "$RC" 2>/dev/null || echo "  (none)"
-          echo "ACTIONS_ID_TOKEN_REQUEST_URL:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}${ACTIONS_ID_TOKEN_REQUEST_URL:-MISSING}"
-          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-MISSING}"
-          echo "registry: $(npm config get registry)"
+      - name: Warn when the npm token is missing
+        if: env.NPM_TOKEN == ''
+        run: echo "::warning::NPM_TOKEN is not set, skipping the npm publish"
 
-      # set -o pipefail matters here: without it the step takes its exit code
-      # from the tail at the end of the pipe, so a failed publish reports
-      # success and the release looks shipped when nothing was.
+      # Trusted publishing is the destination — it needs no token to expire or
+      # be restricted — but npm's Trusted Publisher form does not persist for
+      # this package. Four attempts left the settings page still offering
+      # "Select your publisher", and the registry answered every OIDC token
+      # exchange with "package not found" because no entry exists to match.
+      # That is an npm-side problem, not a workflow one, so publishing stays on
+      # the token until the form saves.
+      #
+      # set -o pipefail matters: without it the step takes its exit code from
+      # the tail at the end of the pipe, so a failed publish reports success.
       - name: Publish
+        if: env.NPM_TOKEN != ''
         env:
-          NODE_AUTH_TOKEN: ''
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -o pipefail
-          npm publish --access public --loglevel verbose 2>&1 \
-            | grep -viE "^npm verb (cli|node|npm|title|argv|logfile)" | tail -60
+          npm publish --access public --provenance 2>&1 | tail -20
