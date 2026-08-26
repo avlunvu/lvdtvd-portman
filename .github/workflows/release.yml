@@ -176,7 +176,13 @@ jobs:
           echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-MISSING}"
           echo "registry: $(npm config get registry)"
 
+      # set -o pipefail matters here: without it the step takes its exit code
+      # from the tail at the end of the pipe, so a failed publish reports
+      # success and the release looks shipped when nothing was.
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ''
-        run: npm publish --access public --loglevel verbose 2>&1 | grep -viE "^npm verb (cli|node|npm|title|argv|logfile)" | tail -60
+        run: |
+          set -o pipefail
+          npm publish --access public --loglevel verbose 2>&1 \
+            | grep -viE "^npm verb (cli|node|npm|title|argv|logfile)" | tail -60
