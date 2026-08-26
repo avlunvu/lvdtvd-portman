@@ -124,16 +124,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No registry-url: setup-node responds to it by writing an .npmrc with an
-      # auth line and setting NODE_AUTH_TOKEN to a placeholder, and npm then
-      # authenticates with that placeholder instead of its OIDC identity. Both
-      # v4 and v6 do this. The registry defaults to registry.npmjs.org anyway.
+      # registry-url is needed so npm knows which registry the OIDC identity is
+      # for — without any .npmrc it gave up with ENEEDAUTH instead of reaching
+      # for OIDC. But setup-node also writes an auth line and a placeholder
+      # NODE_AUTH_TOKEN, and npm authenticates with that placeholder and gets a
+      # 404. So the registry line stays and the auth line is stripped.
       #
       # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.0, so the
       # bundled npm is upgraded rather than trusted to be recent enough.
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       - name: Use an npm that supports trusted publishing
         run: |
@@ -161,15 +163,20 @@ jobs:
       # Requires the package on npmjs.com to name this repository and this
       # workflow file as a trusted publisher; without that this step fails, and
       # it should, rather than quietly shipping nothing.
-      # Printed so a future failure can be read instead of guessed at: the last
-      # one looked like a missing package and was actually a placeholder token
-      # shadowing the OIDC identity.
-      - name: Show how npm will authenticate
+      # OIDC needs both request variables, not just the URL.
+      - name: Strip the placeholder auth line and report the credentials
         run: |
-          echo "OIDC request URL present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}${ACTIONS_ID_TOKEN_REQUEST_URL:-NO}"
-          echo "NODE_AUTH_TOKEN present:  ${NODE_AUTH_TOKEN:+yes}${NODE_AUTH_TOKEN:-no}"
-          echo "npmrc: ${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          sed 's/=.*/=<redacted>/' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}" 2>/dev/null || echo "  (no npmrc)"
+          RC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          echo "npmrc before: $RC"
+          sed 's/=.*/=<redacted>/' "$RC" 2>/dev/null || echo "  (none)"
+          [ -f "$RC" ] && sed -i '/_authToken/d;/always-auth/d' "$RC"
+          echo "npmrc after:"
+          sed 's/=.*/=<redacted>/' "$RC" 2>/dev/null || echo "  (none)"
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}${ACTIONS_ID_TOKEN_REQUEST_URL:-MISSING}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-MISSING}"
+          echo "registry: $(npm config get registry)"
 
       - name: Publish
-        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ''
+        run: npm publish --access public --loglevel verbose 2>&1 | grep -viE "^npm verb (cli|node|npm|title|argv|logfile)" | tail -60
