@@ -124,12 +124,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # setup-node v4 injects a placeholder NODE_AUTH_TOKEN when registry-url is
+      # set without a token. npm then authenticates with that placeholder and
+      # never looks for an OIDC identity, so publishing fails with a 404 that
+      # reads like a missing package. v6 is what npm's own trusted-publishing
+      # guide uses.
+      #
       # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.0, so the
       # bundled npm is upgraded rather than trusted to be recent enough.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
       - name: Use an npm that supports trusted publishing
         run: |
           npm install -g npm@latest
